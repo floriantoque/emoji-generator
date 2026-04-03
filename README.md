@@ -1,22 +1,22 @@
-# stamp-generator
+# emoji-generator
 
-Generate rubber-stamp-style PNG images from the command line.
+Generate emoji-style PNG images from the command line.
 
 ## Install & run
 
 ```bash
 # From GitHub (no install needed)
-uvx --from git+https://github.com/floriantoque/stamp-generator stamp-generator 'HELLO;WORLD'
+uvx --from git+https://github.com/floriantoque/stamp-generator emoji-generator stamp 'HELLO;WORLD'
 
 # Or install locally
 uv pip install git+https://github.com/floriantoque/stamp-generator
-stamp-generator 'APPROVED' --color '#1E90FF'
+emoji-generator stamp 'APPROVED' --color '#1E90FF'
 ```
 
 ## Usage
 
 ```bash
-stamp-generator 'LINE 1;LINE 2' [OPTIONS]
+emoji-generator stamp 'LINE 1;LINE 2' [OPTIONS]
 ```
 
 ### Options
@@ -32,13 +32,25 @@ stamp-generator 'LINE 1;LINE 2' [OPTIONS]
 
 ```bash
 # Red stamp, default settings
-stamp-generator 'SAFETY;SOLVED !'
+uv run emoji-generator stamp 'SAFETY;SOLVED !'
 
 # Blue stamp, more rotation, heavy wear
-stamp-generator 'DO NOT;OPEN' --rotation -15 --color '#0044CC' --noise 0.7
+uv run emoji-generator stamp 'DO NOT;OPEN' --rotation -15 --color '#0044CC' --noise 0.7
 
 # Clean green stamp, no wear
-stamp-generator 'APPROVED' --color '#228B22' --noise 0 --output approved.png
+uv run emoji-generator stamp 'APPROVED' --color '#228B22' --noise 0 --output approved.png
+
+# Two-line stamp
+uv run emoji-generator stamp 'STAMP;SOLVED'
+```
+
+![STAMP SOLVED example](examples/stamp_solved.png)
+
+### Local development
+
+```bash
+uv run emoji-generator stamp 'HELLO;WORLD'
+uv run emoji-generator stamp 'APPROVED' --color '#228B22' --noise 0
 ```
 
 ## License

@@ -1,20 +1,20 @@
-"""Stamp Generator — generates rubber-stamp-style PNG images."""
+"""Emoji Generator — generates emoji-style PNG images."""
 
 import sys
 from pathlib import Path
 
 import cyclopts
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 app = cyclopts.App(
-    name="stamp-generator",
-    help="Generate rubber-stamp-style PNG images.",
+    name="emoji-generator",
+    help="Generate emoji-style PNG images.",
 )
 
 FONT_CANDIDATES = [
-    "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "C:/Windows/Fonts/arialbd.ttf",
@@ -47,8 +47,9 @@ def _best_font(
     text: str, font_path: str, max_w: int, max_h: int, ratio: float = 0.92,
 ) -> tuple[ImageFont.FreeTypeFont, int]:
     """Find largest font size that fits text within max_w x max_h."""
-    for fs in range(220, 40, -1):
-        font = ImageFont.truetype(font_path, fs)
+    font_index = 1 if font_path.endswith(".ttc") else 0
+    for fs in range(400, 40, -1):
+        font = ImageFont.truetype(font_path, fs, index=font_index)
         bb = font.getbbox(text)
         w, h = bb[2] - bb[0], bb[3] - bb[1]
         if w <= max_w * ratio and h <= max_h:
@@ -57,33 +58,47 @@ def _best_font(
 
 
 def _apply_wear(stamp: Image.Image, noise: float) -> Image.Image:
-    """Apply worn-ink texture and pixel-level holes. noise in [0, 1]."""
+    """Apply ink-stain wear effect using seed-based clustering."""
     arr = np.array(stamp)
     rng = np.random.default_rng(42)
 
-    # Fractal noise patch removal
-    noise_raw = rng.random((STAMP_H, STAMP_W))
-    noise_img = Image.fromarray((noise_raw * 255).astype("uint8"), "L")
-    noise_img = noise_img.filter(ImageFilter.GaussianBlur(radius=1.2))
-    noise_arr = np.array(noise_img) / 255.0
+    ink_mask = arr[:, :, 3] > 0
+    ink_pixels = np.argwhere(ink_mask)
+    if len(ink_pixels) == 0:
+        return stamp
 
-    mask = arr[:, :, 3] > 0
-    patch_threshold = min(0.6 * noise, 0.95)
-    arr[(noise_arr < patch_threshold) & mask, 3] = 0
+    # Place seeds on random ink pixels
+    n_seeds = max(10, int(60 * noise))
+    seed_indices = rng.choice(len(ink_pixels), min(n_seeds, len(ink_pixels)), replace=False)
+    seeds = ink_pixels[seed_indices].astype(np.float32)  # (n_seeds, 2)
 
-    # Pixel-level wear (vectorized)
-    pixel_ratio = min(0.4 * noise, 0.8)
-    ink_pixels = np.argwhere(arr[:, :, 3] > 0)
-    n_holes = int(len(ink_pixels) * pixel_ratio)
-    if n_holes > 0:
-        chosen = rng.choice(len(ink_pixels), n_holes, replace=False)
-        arr[ink_pixels[chosen, 0], ink_pixels[chosen, 1], 3] = 0
+    # Compute distance from each ink pixel to nearest seed
+    coords = ink_pixels.astype(np.float32)  # (n_pixels, 2)
+    chunk_size = 50_000
+    min_dists = np.empty(len(coords), dtype=np.float32)
+
+    for i in range(0, len(coords), chunk_size):
+        chunk = coords[i : i + chunk_size]
+        diffs = chunk[:, np.newaxis, :] - seeds[np.newaxis, :, :]  # (chunk, n_seeds, 2)
+        dists = np.sqrt((diffs ** 2).sum(axis=2))  # (chunk, n_seeds)
+        min_dists[i : i + chunk_size] = dists.min(axis=1)
+
+    # Stain probability: high near seeds, falls off with distance
+    radius = max(20.0, 80.0 * noise)
+    prob = np.exp(-min_dists / radius)
+
+    # Scale by noise intensity
+    prob *= min(noise * 1.5, 1.0)
+
+    # Apply stochastic removal
+    remove = rng.random(len(prob)) < prob
+    arr[ink_pixels[remove, 0], ink_pixels[remove, 1], 3] = 0
 
     return Image.fromarray(arr.astype("uint8"), "RGBA")
 
 
-@app.default
-def generate(
+@app.command
+def stamp(
     text: str,
     *,
     rotation: float = 12,
