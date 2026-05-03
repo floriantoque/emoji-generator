@@ -1,100 +1,14 @@
 """Emoji Generator — generates emoji-style PNG images."""
 
-import sys
-from pathlib import Path
-
 import cyclopts
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+
+from .omya import generate_omya
+from .stamp import generate_stamp
 
 app = cyclopts.App(
     name="emoji-generator",
     help="Generate emoji-style PNG images.",
 )
-
-FONT_CANDIDATES = [
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",
-]
-
-STAMP_W, STAMP_H = 900, 560
-
-
-def _find_font() -> str:
-    for p in FONT_CANDIDATES:
-        if Path(p).exists():
-            return p
-    print("No suitable font found.", file=sys.stderr)
-    sys.exit(1)
-
-
-def _parse_color(color: str) -> tuple[int, int, int, int]:
-    """Parse hex color (#RRGGBB or #RGB) to RGBA tuple."""
-    c = color.lstrip("#")
-    if len(c) == 3:
-        c = "".join(ch * 2 for ch in c)
-    if len(c) != 6:
-        print(f"Invalid color: {color}. Use hex like #FF2828", file=sys.stderr)
-        sys.exit(1)
-    r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-    return (r, g, b, 255)
-
-
-def _best_font(
-    text: str, font_path: str, max_w: int, max_h: int, ratio: float = 0.92,
-) -> tuple[ImageFont.FreeTypeFont, int]:
-    """Find largest font size that fits text within max_w x max_h."""
-    font_index = 1 if font_path.endswith(".ttc") else 0
-    for fs in range(400, 40, -1):
-        font = ImageFont.truetype(font_path, fs, index=font_index)
-        bb = font.getbbox(text)
-        w, h = bb[2] - bb[0], bb[3] - bb[1]
-        if w <= max_w * ratio and h <= max_h:
-            return font, h
-    raise ValueError(f"Text too long to fit: {text!r}")
-
-
-def _apply_wear(stamp: Image.Image, noise: float) -> Image.Image:
-    """Apply ink-stain wear effect using seed-based clustering."""
-    arr = np.array(stamp)
-    rng = np.random.default_rng(42)
-
-    ink_mask = arr[:, :, 3] > 0
-    ink_pixels = np.argwhere(ink_mask)
-    if len(ink_pixels) == 0:
-        return stamp
-
-    # Place seeds on random ink pixels
-    n_seeds = max(10, int(60 * noise))
-    seed_indices = rng.choice(len(ink_pixels), min(n_seeds, len(ink_pixels)), replace=False)
-    seeds = ink_pixels[seed_indices].astype(np.float32)  # (n_seeds, 2)
-
-    # Compute distance from each ink pixel to nearest seed
-    coords = ink_pixels.astype(np.float32)  # (n_pixels, 2)
-    chunk_size = 50_000
-    min_dists = np.empty(len(coords), dtype=np.float32)
-
-    for i in range(0, len(coords), chunk_size):
-        chunk = coords[i : i + chunk_size]
-        diffs = chunk[:, np.newaxis, :] - seeds[np.newaxis, :, :]  # (chunk, n_seeds, 2)
-        dists = np.sqrt((diffs ** 2).sum(axis=2))  # (chunk, n_seeds)
-        min_dists[i : i + chunk_size] = dists.min(axis=1)
-
-    # Stain probability: high near seeds, falls off with distance
-    radius = max(20.0, 80.0 * noise)
-    prob = np.exp(-min_dists / radius)
-
-    # Scale by noise intensity
-    prob *= min(noise * 1.5, 1.0)
-
-    # Apply stochastic removal
-    remove = rng.random(len(prob)) < prob
-    arr[ink_pixels[remove, 0], ink_pixels[remove, 1], 3] = 0
-
-    return Image.fromarray(arr.astype("uint8"), "RGBA")
 
 
 @app.command
@@ -121,65 +35,49 @@ def stamp(
     output
         Output PNG file path.
     """
-    lines = [line.strip() for line in text.split(";") if line.strip()]
-    if not lines:
-        print("No text provided.", file=sys.stderr)
-        sys.exit(1)
+    generate_stamp(text, rotation=rotation, color=color, noise=noise, output=output)
 
-    rgba = _parse_color(color)
-    font_path = _find_font()
 
-    stamp = Image.new("RGBA", (STAMP_W, STAMP_H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(stamp)
+@app.command
+def omya(
+    logo: str,
+    *,
+    logo_height: int | None = None,
+    logo_width: int | None = None,
+    padding: int = 0,
+    output: str = "omya.png",
+    no_white_filter: bool = False,
+):
+    """Generate an "old man yells at" image with a logo.
 
-    # Double rounded border
-    margin_out, margin_in = 24, 44
-    radius_out, radius_in = 48, 32
-    border_out, border_in = 16, 8
+    Composes three layers: sky background, the logo pasted near the top-left,
+    and Grandpa Simpson on top — so the logo visually appears behind the
+    character.
 
-    draw.rounded_rectangle(
-        [margin_out, margin_out, STAMP_W - margin_out, STAMP_H - margin_out],
-        radius=radius_out, outline=rgba, width=border_out,
+    Parameters
+    ----------
+    logo
+        URL (http/https) or local path to a logo image.
+    logo_height
+        Logo height in pixels (width scales to preserve aspect ratio).
+        Default 80 if neither --logo-height nor --logo-width is set.
+    logo_width
+        Logo width in pixels (height scales to preserve aspect ratio).
+    padding
+        Pixels of padding from the top and left edges.
+    output
+        Output PNG file path.
+    no_white_filter
+        Keep white pixels instead of making them transparent.
+    """
+    generate_omya(
+        logo,
+        logo_height=logo_height,
+        logo_width=logo_width,
+        padding=padding,
+        output=output,
+        no_white_filter=no_white_filter,
     )
-    draw.rounded_rectangle(
-        [margin_in, margin_in, STAMP_W - margin_in, STAMP_H - margin_in],
-        radius=radius_in, outline=rgba, width=border_in,
-    )
-
-    # Inner safe zone
-    inner_x0 = margin_in + border_in + 10
-    inner_x1 = STAMP_W - margin_in - border_in - 10
-    inner_y0 = margin_in + border_in + 10
-    inner_y1 = STAMP_H - margin_in - border_in - 10
-    max_text_w = inner_x1 - inner_x0
-    max_text_h = inner_y1 - inner_y0
-
-    # Fit fonts per line
-    n_lines = len(lines)
-    gap = max(10, 50 - (n_lines - 2) * 15) if n_lines > 1 else 0
-    per_line_h = (max_text_h - gap * max(n_lines - 1, 0)) // n_lines
-
-    fonts_and_heights = [_best_font(line, font_path, max_text_w, per_line_h) for line in lines]
-
-    # Draw text centered
-    total_h = sum(h for _, h in fonts_and_heights) + gap * max(n_lines - 1, 0)
-    y = inner_y0 + (max_text_h - total_h) / 2
-    cx = STAMP_W // 2
-
-    for line, (font, h) in zip(lines, fonts_and_heights):
-        bb = font.getbbox(line)
-        draw.text((cx - (bb[2] - bb[0]) // 2 - bb[0], y - bb[1]), line, font=font, fill=rgba)
-        y += h + gap
-
-    # Apply wear
-    if noise > 0:
-        stamp = _apply_wear(stamp, noise)
-
-    # Rotate & save
-    rotated = stamp.rotate(rotation, expand=True, resample=Image.BICUBIC)
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
-    rotated.save(output, "PNG")
-    print(f"Saved → {output}  ({rotated.size[0]}×{rotated.size[1]}px)")
 
 
 def main():
