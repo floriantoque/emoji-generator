@@ -5,7 +5,7 @@ from importlib.resources import files
 from io import BytesIO
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
@@ -15,7 +15,8 @@ def _load_logo(source: str, filter_white: bool = True) -> Image.Image:
     """Load a logo from a URL or local path. Returns RGBA."""
     try:
         if source.startswith(("http://", "https://")):
-            with urlopen(source, timeout=10) as resp:
+            req = Request(source, headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(req, timeout=10) as resp:
                 data = resp.read()
             img = Image.open(BytesIO(data))
         else:
